@@ -1,0 +1,32 @@
+# Dependências
+node_modules/
+npm-debug.log*
+
+# Build
+build/
+dist/
+
+# Ambiente
+.env
+.env.local
+
+# Testes
+coverage/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+
+# Docker
+Dockerfile
+.dockerignore
+
+# README
+README.md

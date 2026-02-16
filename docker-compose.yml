@@ -1,0 +1,192 @@
+version: '3.8'
+
+services:
+  # ========================================
+  # BACKEND - API REST + WebSocket
+  # ========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banco-chat-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Servidor
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      
+      # MongoDB
+      MONGODB_URI: mongodb://mongo:27017/banco_chat
+      
+      # Redis
+      REDIS_URL: redis://redis:6379
+      
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: 7d
+      
+      # Sessão
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_MAX_AGE: 604800000
+      
+      # CORS
+      FRONTEND_URL: http://localhost:3001
+      
+      # Rate Limiting
+      RATE_LIMIT_WINDOW: 15
+      RATE_LIMIT_MAX_REQUESTS: 100
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - banco-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========================================
+  # FRONTEND - React App
+  # ========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: banco-chat-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    environment:
+      REACT_APP_API_URL: http://localhost:3000
+      REACT_APP_WS_URL: http://localhost:3000
+    depends_on:
+      - backend
+    networks:
+      - banco-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ========================================
+  # MONGODB - Banco de Dados
+  # ========================================
+  mongo:
+    image: mongo:7.0
+    container_name: banco-chat-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-senha_super_segura}
+      MONGO_INITDB_DATABASE: banco_chat
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - banco-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: --wiredTigerCacheSizeGB 1.5
+
+  # ========================================
+  # REDIS - Cache e Sessões
+  # ========================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: banco-chat-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis_senha_segura}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - banco-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ========================================
+  # MONGO EXPRESS - Admin UI (Opcional)
+  # ========================================
+  mongo-express:
+    image: mongo-express:latest
+    container_name: banco-chat-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-senha_super_segura}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-senha_super_segura}@mongo:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    depends_on:
+      - mongo
+    networks:
+      - banco-network
+    profiles:
+      - dev
+
+  # ========================================
+  # REDIS COMMANDER - Admin UI (Opcional)
+  # ========================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: banco-chat-redis-commander
+    restart: unless-stopped
+    ports:
+      - "8082:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis_senha_segura}
+    depends_on:
+      - redis
+    networks:
+      - banco-network
+    profiles:
+      - dev
+
+# ========================================
+# VOLUMES
+# ========================================
+volumes:
+  mongo-data:
+    driver: local
+  mongo-config:
+    driver: local
+  redis-data:
+    driver: local
+
+# ========================================
+# NETWORKS
+# ========================================
+networks:
+  banco-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
